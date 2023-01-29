@@ -1,23 +1,34 @@
+source("./R/min_max_norm.R")
+library("plotly")
+library("mlr")
+library("netDx")
+library("curatedTCGAData")
+library(Rtsne)
+
 cat("Load data")
-cnv <- readRDS("~/Desktop/netDx/dataset/cnv.rds")
-labels_pfi <- readRDS("~/Desktop/netDx/dataset/labels_pfi.rds")
-mirna <- readRDS("~/Desktop/netDx/dataset/mirna.rds")
-mrna <- readRDS("~/Desktop/netDx/dataset/mrna.rds")
-proteins <- readRDS("~/Desktop/netDx/dataset/proteins.rds")
+cnv <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/cnv.rds")
+mirna <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/mirna.rds")
+mrna <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/mrna.rds")
+proteins <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/proteins.rds")
 
+labels_pfi <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/labels_pfi.rds")
+
+################################################################################
 cat("Normalize mrna, mirna and proteins with min_max_norm")
-source("~/Desktop/netDx/R/min_max_norm.R")
-mirna <- min_max_norm(mirna)
-mrna <- min_max_norm(mrna)
-proteins <- min_max_norm(proteins)
+mirna <- apply(mirna, 2, min_max_norm)
+mrna <- apply(mrna, 2, min_max_norm)
+proteins <- apply(proteins, 2, min_max_norm)
 
+
+################################################################################
 cat("Create dataframe pheno")
-pheno <- data.frame(ID = c(rownames(cnv)), STATUS = as.character(c(labels_pfi)))
+pheno <- data.frame(ID = rownames(cnv), STATUS = as.character(labels_pfi))
 rownames(pheno) <- rownames(cnv)
 
+################################################################################
 cat("Class balance")
 fig <- plot_ly(x = c("0", "1"),                                    
-        y = c(sum(pheno$STATUS == 0), sum(pheno$STATUS == 1)),
+        y = c(sum(pheno$STATUS == "0"), sum(pheno$STATUS == "1")),
         color = c('0', '1'),
         type = "bar")
 
@@ -27,7 +38,7 @@ fig <- fig %>% layout(title = "Class Balance",
 
 fig
 
-
+################################################################################
 cat("Removing the constants features")
 cnv <- as.data.frame(cnv)
 cnv <- removeConstantFeatures(cnv, 0, show.info = FALSE)
@@ -41,50 +52,46 @@ mrna <- removeConstantFeatures(mrna, 0, show.info = FALSE)
 proteins <- as.data.frame(proteins)
 proteins <- removeConstantFeatures(proteins, 0, show.info = FALSE)
 
+################################################################################
 cat("Tranform data in MultiAssayExperiment object")
 brcaList <- list(t(mrna), t(mirna), t(proteins), t(cnv), pheno)
 names(brcaList) <- c("mrna", "mirna", "proteins", "cnv", "pheno")
 brca <- convertToMAE(brcaList)
 
+#pathFile <- fetchPathwayDefinitions("October",2020)
+#pathwayList <- readPathways(pathFile)
+
 cat("Grouping variables to define features")
 groupList <- list();
-pathFile <- sprintf("%s/extdata/pathways.gmt", path.package("netDx"))
-pathwayList <- readPathways(pathFile,MIN_SIZE=5L,MAX_SIZE=300L)
 
-gene_names=rownames(brcaList[["mrna"]])
-netList <- foreach(k=1:length(pathwayList)) %do% {
-  idx <- which(gene_names %in% pathwayList[[k]])
-}
-
-n_genes_in_pathway = sapply(netList,FUN=length)
-pathwayList=pathwayList[n_genes_in_pathway > 1]
-groupList[["mrna"]] <- pathwayList
-
-for(i in 2:length(experiments(brca))){
+for(i in 1:length(experiments(brca))){
   tmp <- list(rownames(experiments(brca)[[i]]));
   names(tmp) <- names(brca)[i]
   groupList[[names(brca)[[i]]]] <- tmp
 }
 
+################################################################################
 cat("Define patient similarity for each network")
 sims <- list(
-  mrna="pearsonCorr",
-  mirna="pearsonCorr",
-  proteins="pearsonCorr",
-  cnv="pearsonCorr"
+  mrna="sim.eucscale",
+  mirna="sim.eucscale",
+  proteins="sim.eucscale",
+  cnv="sim.eucscale"
 )
 
+################################################################################
 cat("Holdout validation set")
 set.seed(123)
 dsets <- subsampleValidationData(brca,pctValidation=0.1)
 brca <- dsets$trainMAE
 holdout <- dsets$validationMAE
 
-setwd("~/Desktop/netDx/")
-outDir <- "/Users/andreapennati/Desktop/netDx/pred"
-nco <- round(parallel::detectCores()*0.75)
+setwd("~/Scrivania/netDx-multiomics-classification/")
+outDir <- "/home/ndrep/Scrivania/netDx-multiomics-classification/pred"
+nco <- round(parallel::detectCores())
 if (file.exists(outDir)) unlink(outDir,recursive=TRUE)
 
+################################################################################
 cat("Model training")
 t0 <- Sys.time()
 model <-buildPredictor(
@@ -93,9 +100,9 @@ model <-buildPredictor(
   sims=sims,
   outDir=outDir,          
   trainProp=0.8,          
-  numSplits=10L,            
+  numSplits=2L,            
   featSelCutoff=1L,       
-  featScoreMax=1L,    
+  featScoreMax=2L,
   numCores=nco,            
   debugMode=FALSE,
   keepAllData=FALSE,     
@@ -104,15 +111,26 @@ model <-buildPredictor(
 t1 <- Sys.time()
 print(t1-t0)
 
+################################################################################
+cat("Confusion Matrix")
+confMat <- confusionMatrix(model)
+
+################################################################################
 cat("Examine results")
 results <- getResults(
   model,
   unique(colData(brca)$STATUS),
-  featureSelCutoff=1L,
+  featureSelCutoff=2L,
   featureSelPct=0.50
 )
 
+################################################################################
 cat("Validate on independent samples")
+outDir <- paste(tempdir(), randAlphanumString(), 
+                sep = getFileSep())
+if (file.exists(outDir)) unlink(outDir,recursive=TRUE)
+dir.create(outDir)
+
 predModel <- suppressMessages(
   predict(trainMAE=brca, testMAE=holdout, 
           groupList=groupList, 
@@ -121,9 +139,15 @@ predModel <- suppressMessages(
           outDir=outDir, verbose = FALSE)
 )
 
+################################################################################
 cat("Plot results of validation")
 perf <- getPerformance(predModel, 
                        unique(colData(brca)$STATUS))
+
+plotPerf_multi(list(perf$rocCurve),
+               plotTitle = sprintf(
+                 "Validation: %i samples", 
+                 nrow(colData(holdout))))
 
 plotPerf_multi(list(perf$prCurve), 
                plotType = "PR",
