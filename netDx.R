@@ -1,32 +1,52 @@
-source("./R/min_max_norm.R")
-library("plotly")
-library("mlr")
 library("netDx")
 library("curatedTCGAData")
-library(Rtsne)
 
-cat("Load data")
-cnv <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/cnv.rds")
-mirna <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/mirna.rds")
-mrna <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/mrna.rds")
-proteins <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/proteins.rds")
+######LOAD DATA#################################################################
+cnv <- as.data.frame(readRDS("/Users/a.pennati/Desktop/netDx-multiomics-classification/dataset/cnv.rds"))
+mirna <- as.data.frame(readRDS("/Users/a.pennati/Desktop/netDx-multiomics-classification/dataset/mirna.rds"))
+mrna <- as.data.frame(readRDS("/Users/a.pennati/Desktop/netDx-multiomics-classification/dataset/mrna.rds"))
+proteins <- as.data.frame(readRDS("/Users/a.pennati/Desktop/netDx-multiomics-classification/dataset/proteins.rds"))
 
-labels_pfi <- readRDS("~/Scrivania/netDx-multiomics-classification/dataset/labels_pfi.rds")
-
-################################################################################
-cat("Normalize mrna, mirna and proteins with min_max_norm")
-mirna <- apply(mirna, 2, min_max_norm)
-mrna <- apply(mrna, 2, min_max_norm)
-proteins <- apply(proteins, 2, min_max_norm)
+labels_pfi <- readRDS("/Users/a.pennati/Desktop/netDx-multiomics-classification/dataset/labels_pfi.rds")
 
 
-################################################################################
-cat("Create dataframe pheno")
+#################CROSS CORRELATION VISUALIZATION####################################
+library(lares)
+
+corr_cross(proteins, # name of dataset
+           max_pvalue = 0.05, # display only significant correlations (at 5% level)
+           top = 10 # display top 10 couples of variables (by correlation coefficient)
+)
+
+######NORMALIZE MRNA, MIRNA AND PROTEINS WITH MIN_MAX_NORM######################
+source("./R/min_max_norm.R")
+mirna <- as.data.frame(round(apply(mirna, 2, min_max_norm), 2))
+mrna <- as.data.frame(round(apply(mrna, 2, min_max_norm), 2))
+proteins <- as.data.frame(round(apply(proteins, 2, min_max_norm), 2))
+
+################REMOVING FEATURES############################
+
+library("mlr")
+cnv <- removeConstantFeatures(cnv, 0, show.info = FALSE)
+mirna <- removeConstantFeatures(mirna, 0, show.info = FALSE)
+mrna <- removeConstantFeatures(mrna, 0, show.info = FALSE)
+proteins <- removeConstantFeatures(proteins, 0, show.info = FALSE)
+
+#########################DROP FEATURE CORRELATED################################
+source("./R/drop_feature_correlated.R")
+cnv <- drop_feature_correlated(cnv)
+mirna <- drop_feature_correlated(mirna)
+mrna <- drop_feature_correlated(mrna)
+proteins <- drop_feature_correlated(proteins)
+
+
+############CREATE DATAFRME PHENO##############################
+
 pheno <- data.frame(ID = rownames(cnv), STATUS = as.character(labels_pfi))
 rownames(pheno) <- rownames(cnv)
 
-################################################################################
-cat("Class balance")
+#########################CLASS BALANCE##########################################
+library("plotly")
 fig <- plot_ly(x = c("0", "1"),                                    
         y = c(sum(pheno$STATUS == "0"), sum(pheno$STATUS == "1")),
         color = c('0', '1'),
@@ -38,30 +58,17 @@ fig <- fig %>% layout(title = "Class Balance",
 
 fig
 
-################################################################################
-cat("Removing the constants features")
-cnv <- as.data.frame(cnv)
-cnv <- removeConstantFeatures(cnv, 0, show.info = FALSE)
 
-mirna <- as.data.frame(mirna)
-mirna <- removeConstantFeatures(mirna, 0, show.info = FALSE)
 
-mrna <- as.data.frame(mrna)
-mrna <- removeConstantFeatures(mrna, 0, show.info = FALSE)
-
-proteins <- as.data.frame(proteins)
-proteins <- removeConstantFeatures(proteins, 0, show.info = FALSE)
-
-################################################################################
-cat("Tranform data in MultiAssayExperiment object")
-brcaList <- list(t(mrna), t(mirna), t(proteins), t(cnv), pheno)
-names(brcaList) <- c("mrna", "mirna", "proteins", "cnv", "pheno")
+####################TRANSFORM DATA IN MULTIASSAYEXPERIMENT####################################
+brcaList <- list(t(mirna),t(cnv),t(proteins), pheno)
+names(brcaList) <- c("mirna","cnv","proteins", "pheno")
 brca <- convertToMAE(brcaList)
 
 #pathFile <- fetchPathwayDefinitions("October",2020)
 #pathwayList <- readPathways(pathFile)
 
-cat("Grouping variables to define features")
+####################GROUPING VARIABLE TO DEFINE FEATURE####################################
 groupList <- list();
 
 for(i in 1:length(experiments(brca))){
@@ -70,29 +77,27 @@ for(i in 1:length(experiments(brca))){
   groupList[[names(brca)[[i]]]] <- tmp
 }
 
-################################################################################
-cat("Define patient similarity for each network")
+###############DEFINE PATIENT SIMILARITY FOR EACH NETWORK########################
 sims <- list(
-  mrna="sim.eucscale",
   mirna="sim.eucscale",
-  proteins="sim.eucscale",
-  cnv="sim.eucscale"
+  cnv="sim.eucscale",
+  proteins="sim.eucscale"
 )
 
-################################################################################
-cat("Holdout validation set")
+
+
+#####################HOLDOUT VALIDATION SET#############################
 set.seed(123)
 dsets <- subsampleValidationData(brca,pctValidation=0.1)
 brca <- dsets$trainMAE
 holdout <- dsets$validationMAE
 
-setwd("~/Scrivania/netDx-multiomics-classification/")
-outDir <- "/home/ndrep/Scrivania/netDx-multiomics-classification/pred"
+setwd("/Users/a.pennati/Desktop/netDx-multiomics-classification/")
+outDir <- "/Users/a.pennati/Desktop/netDx-multiomics-classification/pred"
 nco <- round(parallel::detectCores())
 if (file.exists(outDir)) unlink(outDir,recursive=TRUE)
 
-################################################################################
-cat("Model training")
+##################MODEL TRAINING#################################
 t0 <- Sys.time()
 model <-buildPredictor(
   dataList=brca,          
@@ -100,9 +105,9 @@ model <-buildPredictor(
   sims=sims,
   outDir=outDir,          
   trainProp=0.8,          
-  numSplits=2L,            
-  featSelCutoff=1L,       
-  featScoreMax=2L,
+  numSplits=1L,            
+  featSelCutoff=2L,       
+  featScoreMax=10L,
   numCores=nco,            
   debugMode=FALSE,
   keepAllData=FALSE,     
@@ -111,21 +116,18 @@ model <-buildPredictor(
 t1 <- Sys.time()
 print(t1-t0)
 
-################################################################################
-cat("Confusion Matrix")
+###########################CONFUSION MATRIX#################################
 confMat <- confusionMatrix(model)
 
-################################################################################
-cat("Examine results")
+######################EXAMINE RESULTS##################################
 results <- getResults(
   model,
   unique(colData(brca)$STATUS),
-  featureSelCutoff=2L,
+  featureSelCutoff=3L,
   featureSelPct=0.50
 )
 
-################################################################################
-cat("Validate on independent samples")
+#################VALIDATE ON INDIPENDENT SAMPLES################################
 outDir <- paste(tempdir(), randAlphanumString(), 
                 sep = getFileSep())
 if (file.exists(outDir)) unlink(outDir,recursive=TRUE)
@@ -139,8 +141,7 @@ predModel <- suppressMessages(
           outDir=outDir, verbose = FALSE)
 )
 
-################################################################################
-cat("Plot results of validation")
+######################PLOT RESULTS OF VALIDATION#################################
 perf <- getPerformance(predModel, 
                        unique(colData(brca)$STATUS))
 
@@ -155,6 +156,7 @@ plotPerf_multi(list(perf$prCurve),
                  "Validation with %i samples", 
                  nrow(colData(holdout))))
 
+#####################DATA VISUALIZATION#########################################
 psn <- suppressMessages(getPSN(
   brca,
   groupList,

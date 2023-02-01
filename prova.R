@@ -75,9 +75,7 @@ holdout <- dsets$validationMAE
 groupList <- list()
 
 # genes in mRNA data are grouped by pathways
-pathFile <- sprintf("%s/extdata/pathway_ex3.gmt", path.package("netDx"))
-pathList <- suppressMessages(readPathways(pathFile))
-groupList[["BRCA_mRNAArray-20160128"]] <- pathList
+
 
 
 groupList[["clinical"]] <- list(
@@ -98,6 +96,10 @@ tmp <- list(rownames(experiments(brca)[[3]]));
 names(tmp) <- names(brca)[3]
 groupList[[names(brca)[3]]] <- tmp
 
+pathFile <- sprintf("%s/extdata/pathway_ex3.gmt", path.package("netDx"))
+pathList <- suppressMessages(readPathways(pathFile))
+groupList[["BRCA_mRNAArray-20160128"]] <- pathList
+
 ## ----eval=TRUE----------------------------------------------------------------
 sims <- list(
   a="pearsonCorr",
@@ -113,7 +115,7 @@ names(sims) <- names(groupList)
 nco <- round(parallel::detectCores())
 message(sprintf("Using %i of %i cores", nco, parallel::detectCores()))
 
-outDir <- paste(tempdir(),"pred_output",sep=getFileSep()) # use absolute path
+outDir <- outDir <- "/Users/a.pennati/Desktop/netDx-multiomics-classification/predd"
 if (file.exists(outDir)) unlink(outDir,recursive=TRUE)
 numSplits <- 2L
 
